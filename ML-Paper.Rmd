@@ -1,0 +1,110 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "npanei"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+This project analyzes a data set concerning several different types of exercise,
+and the readout from several motion-sensing devices on the exercising person's
+body. The goal of the project is to use the readouts from those sensors to predict
+what type of exercise is being performed. This project uses machine learning techniques
+to create a predictive model.
+
+## Data Cleaning and Pre-Processing
+
+```{r}
+# load files and relevant libraries
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv","pml-training.csv")
+training <- read.csv("pml-training.csv",na.strings=c("NA",""))
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv","pml-testing.csv")
+testing <- read.csv("pml-testing.csv")
+
+library(caret)
+```
+
+The "training" set used here consists of 19,622 observations of 160 variables.
+Of these, 100 variables are almost completely empty; they have over 19,000
+"NA" values. After eliminating these, and additionally a few irrelevant
+variables such as timestamps and dates, 52 independent variables remain.
+
+```{r}
+# eliminate variates with a large number of missing values in the training set
+k <- c()
+for (i in 1:160) {
+    k[i] <- sum(is.na(training[,i])) < 19000
+}
+training <- training[,k]
+# eliminate add'l  useless variates such as timestamps
+training <- training[,-c(1:7)]
+```
+
+As an additional measure, we will not train on the entire data set. Pre-processing
+and performing training on the entire set of 19,622 observations would
+take an unreasonably long time. In order to expedite the analysis, and additionally
+as a cross-validation technique, only 20% of the "training" data set will actually
+be used for training. The other 80% will be used for validation.
+
+```{r}
+# partition the data
+set.seed(120)
+inTrain <- createDataPartition(training$classe, p = 0.2)[[1]]
+realTrain <- training[ inTrain,]
+validTrain <- training[-inTrain,]
+```
+
+In order to simplify the problem, we will use principal component analysis (PCA)
+pre-processing on our data set. The threshold for the number of PCs used will be
+80%. As shown below, 80% of the variance in the data set is captured by the first
+five PCAs. Thus, the number of independent variables to be analyzed will be reduced
+from 52 to 5.
+
+```{r}
+fitPCA <- prcomp(training[,-53])
+summary(fitPCA)$importance[,1:5]
+ctrl <- trainControl(preProcOptions = list(thresh = 0.8))
+```
+
+## Model Selection
+
+Two different machine learning methods will be used to generate the models: random
+forest ("RF") and boosting with trees ("GBM"). To select the final model, we will
+simply compare the accuracy of the models on the validation data set.
+
+
+```{r}
+# generate models
+# the first model training function produces warnings but works fine
+suppressWarnings(model1 <- train(classe ~ .,method="rf",data=realTrain,
+                preProcess="pca",trControl=ctrl))
+model2 <- train(classe ~ .,method="gbm",data=realTrain,
+                preProcess="pca",trControl=ctrl,verbose=FALSE)
+
+# compute accuracy on training and validation data sets
+predict1 <- predict(model1,realTrain)
+valid1 <- predict(model1,validTrain)
+predict2 <- predict(model2,realTrain)
+valid2 <- predict(model2,validTrain)
+
+acclist <- c(confusionMatrix(predict1,realTrain$classe)$overall[1],
+             confusionMatrix(valid1,validTrain$classe)$overall[1],
+             confusionMatrix(predict2,realTrain$classe)$overall[1],
+             confusionMatrix(valid2,validTrain$classe)$overall[1])
+names(acclist) <- c("RF (Train)","RF (Val)", "GBM (Train)", "GBM (Val)")
+acclist # accuracy comparison
+
+# plot results
+barplot(acclist,ylab="Accuracy (%)",col=c("yellow1","navy"),
+        main="Accuracy of Random Forest v. Boosting Models")
+```
+
+The random forest model clearly outperformed the boosting model, with an accuracy of 89%
+versus 74% on the validation set. The 100% accuracy of the random forest model on the
+training set may suggest overfitting, but the cross-validated accuracy of 89% suggests
+that it's not to a problematic degree. Therefore, for our final selection, we choose the
+random forest model. As a last note, we expect our out-of-sample error rate to be
+approximately the error rate of the model on the validation set: 11%.
